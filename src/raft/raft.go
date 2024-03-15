@@ -59,8 +59,8 @@ type ApplyMsg struct {
 }
 
 type Entry struct {
+	Command interface{}
 	Term    int
-	Command int
 }
 
 // A Go object implementing a single Raft peer.
@@ -190,7 +190,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.votedFor = -1
 		rf.currentTerm = args.Term
 	}
-	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && (len(rf.log) <= args.LastLogIndex+1) {
+	meLastLog := rf.log[len(rf.log)-1]
+	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && (meLastLog.Term < args.LastLogTerm || (meLastLog.Term == args.LastLogTerm && (len(rf.log)-1) <= args.LastLogIndex)) {
 		rf.votedFor = args.CandidateId
 		reply.VoteGranted = true
 	}
@@ -211,13 +212,21 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.ResetElectionTimer()
 	reply.Term = args.Term
 	reply.Success = true
+	if args.Entries != nil {
+		if args.Term != rf.log[args.PrevLogIndex].Term {
+			reply.Success = false
+		} else {
+			rf.log = rf.log[:args.PrevLogIndex]
+			rf.log = append(rf.log, args.Entries...)
+		}
+	}
 }
 func (rf *Raft) ResetElectionTimer() {
 	timeout := time.Duration(250+rand.Intn(300)) * time.Millisecond
 	rf.electExpiryTime = time.Now().Add(timeout)
 }
 func (rf *Raft) ResetHrtBtTimer() {
-	timeout := time.Duration(20+rand.Intn(30)) * time.Millisecond
+	timeout := time.Duration(20+rand.Intn(20)) * time.Millisecond
 	rf.hrtBtExpiryTime = time.Now().Add(timeout)
 }
 
@@ -272,11 +281,17 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
-	isLeader := true
-
 	// Your code here (2B).
-
-	return index, term, isLeader
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.state != Leader {
+		return index, term, false
+	}
+	entry := Entry{command, rf.currentTerm}
+	rf.log = append(rf.log, entry)
+	index = len(rf.log)
+	term = rf.currentTerm
+	return index, term, true
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -339,6 +354,10 @@ func (rf *Raft) ticker() {
 									rf.mu.Unlock()
 									rf.state = Leader
 									rf.votedFor = -1
+									logLen := len(rf.log)
+									for idx := range rf.peers {
+										rf.nextIndex[idx] = logLen
+									}
 									return
 								}
 							}
@@ -348,13 +367,13 @@ func (rf *Raft) ticker() {
 				}
 			}()
 		}
-		if rf.state == Leader && time.Now().After(rf.hrtBtExpiryTime) {
-			rf.ResetHrtBtTimer()
-			for idx, _ := range rf.peers {
-				if idx == rf.me {
-					continue
-				}
-				go func(idx int) {
+		if rf.state == Leader {
+			if time.Now().After(rf.hrtBtExpiryTime) {
+				rf.ResetHrtBtTimer()
+				for idx := range rf.peers {
+					if idx == rf.me {
+						continue
+					}
 					args := AppendEntriesArgs{}
 					reply := AppendEntriesReply{}
 					rf.mu.Lock()
@@ -363,20 +382,35 @@ func (rf *Raft) ticker() {
 					args.PrevLogIndex = rf.nextIndex[idx] - 1
 					args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
 					args.LeaderId = rf.me
+					if rf.nextIndex[idx] < len(rf.log) {
+						args.Entries = make([]Entry, len(rf.log[rf.nextIndex[idx]:]))
+						copy(args.Entries, rf.log[rf.nextIndex[idx]:])
+					}
 					rf.mu.Unlock()
-					ok := rf.sendAppendEntries(idx, &args, &reply)
-					if !ok {
-						return
-					}
-					rf.mu.Lock()
-					defer rf.mu.Unlock()
-					if reply.Term > args.Term {
-						rf.state = follower
-						rf.currentTerm = reply.Term
-						rf.votedFor = -1
-						return
-					}
-				}(idx)
+					commitCount := 1
+					go func(idx int) {
+						ok := rf.sendAppendEntries(idx, &args, &reply)
+						if !ok {
+							return
+						}
+						rf.mu.Lock()
+						defer rf.mu.Unlock()
+						if reply.Term > args.Term {
+							rf.state = follower
+							rf.currentTerm = reply.Term
+							rf.votedFor = -1
+							return
+						}
+						if args.Entries != nil {
+							if reply.Success {
+								rf.nextIndex[idx] = len(rf.log)
+								rf.matchIndex[idx] = rf.nextIndex[idx] - 1
+							} else {
+								rf.nextIndex[idx]--
+							}
+						}
+					}(idx)
+				}
 			}
 		}
 		ms := 50 + (rand.Int63() % 300)
@@ -404,10 +438,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	rf.state = follower
 	rf.votedFor = -1
-	rf.commitIndex = -1
+	rf.commitIndex = 0
+	rf.lastApplied = 0
 	rf.nextIndex = make([]int, len(rf.peers))
-	for i, _ := range rf.nextIndex {
+	rf.matchIndex = make([]int, len(rf.peers))
+	for i := range rf.nextIndex {
 		rf.nextIndex[i] = 1
+	}
+	for i := range rf.matchIndex {
+		rf.matchIndex[i] = 0
 	}
 	rf.log = append(rf.log, Entry{})
 	// Your initialization code here (2A, 2B, 2C).
