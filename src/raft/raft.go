@@ -203,6 +203,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	// log.Printf("%d %d %d %d", rf.me, rf.currentTerm, args.LeaderId, args.PrevLogTerm)
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
@@ -214,30 +215,40 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.ResetElectionTimer()
 	reply.Term = args.Term
 	reply.Success = true
-	if args.Entries != nil {
-		if args.PrevLogIndex >= len(rf.log) || args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
-			reply.Success = false
-		} else {
-			rf.log = rf.log[:args.PrevLogIndex+1]
-			rf.log = append(rf.log, args.Entries...)
-		}
+	log.Printf("AppendEntries %d %d", rf.me, args.PrevLogIndex)
+	if args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
+		rf.log = rf.log[:args.PrevLogIndex]
+		rf.log = append(rf.log, args.Entries...)
+		log.Printf("AppendEntriesUp %d %d %d", rf.me, rf.log, args.Entries)
+		rf.matchIndex[rf.me] = len(rf.log) - 1
+		return
+	} else if args.PrevLogIndex == (len(rf.log) - 1) {
+		rf.log = rf.log[:args.PrevLogIndex]
+		rf.log = append(rf.log, args.Entries...)
+		log.Printf("AppendEntriesDown %d %d %d", rf.me, rf.log, args.Entries)
+		rf.matchIndex[rf.me] = len(rf.log) - 1
+		return
+	} else {
+		reply.Success = false
 	}
-	// log.Printf("%d %d %d", rf.commitIndex, args.LeaderCommit, rf.log)
-	for i := rf.commitIndex + 1; i <= args.LeaderCommit && i < len(rf.log); i++ {
+	rf.commitIndex = rf.matchIndex[rf.me]
+	for i := rf.lastApplied + 1; i <= rf.commitIndex && i <= args.PrevLogIndex; i++ {
+		log.Printf("------ %d %d %d %d", rf.me, args.PrevLogIndex, rf.commitIndex, rf.log)
 		(*rf.applyChan) <- ApplyMsg{
 			CommandValid: true,
 			Command:      rf.log[i].Command,
 			CommandIndex: i,
 		}
-		rf.commitIndex++
+		rf.lastApplied++
 	}
+	// log.Printf("%d %d %d", rf.commitIndex, args.LeaderCommit, rf.log)
 }
 func (rf *Raft) ResetElectionTimer() {
 	timeout := time.Duration(250+rand.Intn(300)) * time.Millisecond
 	rf.electExpiryTime = time.Now().Add(timeout)
 }
 func (rf *Raft) ResetHrtBtTimer() {
-	timeout := time.Duration(20+rand.Intn(20)) * time.Millisecond
+	timeout := time.Duration(10+rand.Intn(10)) * time.Millisecond
 	rf.hrtBtExpiryTime = time.Now().Add(timeout)
 }
 
@@ -295,6 +306,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	if rf.state != Leader {
 		return index, term, false
 	}
@@ -334,9 +346,9 @@ func (rf *Raft) ticker() {
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		// log.Printf("rf.me %d  rf.currentTerm%d rf.log%d rf.state %d", rf.me, rf.currentTerm, rf.log, rf.state)
+		log.Printf("rf.me %d  rf.currentTerm%d rf.log%d rf.state %d", rf.me, rf.currentTerm, rf.log, rf.state)
 		if rf.state != Leader && time.Now().After(rf.electExpiryTime) {
-			//log.Printf("election %d %d", rf.me, rf.currentTerm)
+			log.Printf("election %d %d", rf.me, rf.currentTerm)
 			go func() {
 				rf.mu.Lock()
 				rf.state = candidate
@@ -370,9 +382,8 @@ func (rf *Raft) ticker() {
 									rf.state = Leader
 									//log.Printf("+- %d %d", rf.me, rf.currentTerm)
 									rf.votedFor = -1
-									logLen := len(rf.log)
 									for idx := range rf.peers {
-										rf.nextIndex[idx] = logLen
+										rf.nextIndex[idx] = rf.matchIndex[idx] + 1
 									}
 									rf.mu.Unlock()
 									return
@@ -392,20 +403,22 @@ func (rf *Raft) ticker() {
 					if idx == rf.me {
 						continue
 					}
-					//log.Printf("hrtbt %d", idx)
+					// log.Printf("hrtbt %d", idx)
 					args := AppendEntriesArgs{}
 					reply := AppendEntriesReply{}
 					rf.mu.Lock()
 					args.Term = rf.currentTerm
 					args.LeaderCommit = rf.commitIndex
 					args.PrevLogIndex = rf.nextIndex[idx] - 1
-					// //log.Printf("inLeader %d %d %d", args.PrevLogIndex, rf.nextIndex[idx], len(rf.log))
+					log.Printf("inLeader %d %d %d %d", idx, args.PrevLogIndex, rf.nextIndex[idx], len(rf.log))
 					args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
 					args.LeaderId = rf.me
 					// //log.Printf("111  %d %d %d", rf.nextIndex[idx], len(rf.log), len(args.Entries))
-					if rf.nextIndex[idx] < len(rf.log) {
-						args.Entries = make([]Entry, len(rf.log[rf.nextIndex[idx]:]))
-						copy(args.Entries, rf.log[rf.nextIndex[idx]:])
+					if args.PrevLogIndex <= len(rf.log) {
+						args.Entries = make([]Entry, len(rf.log[args.PrevLogIndex:]))
+						// log.Printf("_=_+_+_+_+_+ %d %d %d", rf.nextIndex[idx], rf.log[rf.nextIndex[idx]:len(rf.log)], args.Entries)
+						copy(args.Entries, rf.log[args.PrevLogIndex:])
+
 					}
 					rf.mu.Unlock()
 					go func(idx int) {
@@ -427,25 +440,28 @@ func (rf *Raft) ticker() {
 								commitCount := 0
 								rf.nextIndex[idx] = len(rf.log)
 								rf.matchIndex[idx] = rf.nextIndex[idx] - 1
-								for idx := range rf.peers {
-									if rf.matchIndex[rf.me] == rf.matchIndex[idx] {
-										commitCount++
-									}
-								}
-								if commitCount == (len(rf.peers)/2 + 1) {
-									rf.commitIndex = rf.matchIndex[rf.me]
-									for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-										(*rf.applyChan) <- ApplyMsg{
-											CommandValid: true,
-											Command:      rf.log[i].Command,
-											CommandIndex: i,
+								if rf.lastApplied < rf.matchIndex[rf.me] {
+									for idx := range rf.peers {
+										if rf.matchIndex[rf.me] == rf.matchIndex[idx] {
+											commitCount++
 										}
-										rf.lastApplied++
+									}
+									if commitCount == (len(rf.peers)/2 + 1) {
+										rf.commitIndex = rf.matchIndex[rf.me]
+										for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
+											(*rf.applyChan) <- ApplyMsg{
+												CommandValid: true,
+												Command:      rf.log[i].Command,
+												CommandIndex: i,
+											}
+											rf.lastApplied++
+										}
 									}
 								}
 							} else {
-								rf.nextIndex[idx]--
-								log.Printf("%d %d %d", rf.nextIndex[idx], rf.me)
+								if rf.nextIndex[idx] < len(rf.log) {
+									rf.nextIndex[idx]++
+								}
 							}
 						}
 					}(idx)

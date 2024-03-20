@@ -8,12 +8,15 @@ package raft
 // test with the original before submitting.
 //
 
-import "testing"
-import "fmt"
-import "time"
-import "math/rand"
-import "sync/atomic"
-import "sync"
+import (
+	"fmt"
+	"log"
+	"math/rand"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
@@ -458,18 +461,14 @@ func TestRejoin2B(t *testing.T) {
 	defer cfg.cleanup()
 
 	cfg.begin("Test (2B): rejoin of partitioned leader")
-
 	cfg.one(101, servers, true)
-
 	// leader network failure
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
-
 	// make old leader try to agree on some entries
 	cfg.rafts[leader1].Start(102)
 	cfg.rafts[leader1].Start(103)
 	cfg.rafts[leader1].Start(104)
-
 	// new leader commits, also for index=2
 	cfg.one(103, 2, true)
 
@@ -479,9 +478,8 @@ func TestRejoin2B(t *testing.T) {
 
 	// old leader connected again
 	cfg.connect(leader1)
-
+	log.Printf("==========================================")
 	cfg.one(104, 2, true)
-
 	// all together now
 	cfg.connect(leader2)
 
