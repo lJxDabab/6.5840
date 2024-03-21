@@ -20,7 +20,6 @@ package raft
 import (
 	//	"bytes"
 
-	"log"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -215,31 +214,33 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.ResetElectionTimer()
 	reply.Term = args.Term
 	reply.Success = true
-	log.Printf("AppendEntries %d %d", rf.me, args.PrevLogIndex)
-	if args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
-		rf.log = rf.log[:args.PrevLogIndex]
-		rf.log = append(rf.log, args.Entries...)
-		log.Printf("AppendEntriesUp %d %d %d", rf.me, rf.log, args.Entries)
-		rf.matchIndex[rf.me] = len(rf.log) - 1
-		return
-	} else if args.PrevLogIndex == (len(rf.log) - 1) {
-		rf.log = rf.log[:args.PrevLogIndex]
-		rf.log = append(rf.log, args.Entries...)
-		log.Printf("AppendEntriesDown %d %d %d", rf.me, rf.log, args.Entries)
-		rf.matchIndex[rf.me] = len(rf.log) - 1
-		return
-	} else {
-		reply.Success = false
+	// log.Printf("AppendEntries %d %d %d %d %d", rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.log[args.PrevLogIndex].Term, args.Entries)
+	if args.Entries != nil {
+		if args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
+			rf.log = rf.log[:args.PrevLogIndex]
+			rf.log = append(rf.log, args.Entries...)
+			// log.Printf("AppendEntriesUp %d %d %d", rf.me, rf.log, args.Entries)
+			rf.matchIndex[rf.me] = len(rf.log) - 1
+			return
+		} else if args.PrevLogIndex == (len(rf.log) - 1) {
+			rf.log = rf.log[:args.PrevLogIndex]
+			rf.log = append(rf.log, args.Entries...)
+			// log.Printf("AppendEntriesDown %d %d %d", rf.me, rf.log, args.Entries)
+			rf.matchIndex[rf.me] = len(rf.log) - 1
+			return
+		} else {
+			reply.Success = false
+		}
 	}
-	rf.commitIndex = rf.matchIndex[rf.me]
-	for i := rf.lastApplied + 1; i <= rf.commitIndex && i <= args.PrevLogIndex; i++ {
-		log.Printf("------ %d %d %d %d", rf.me, args.PrevLogIndex, rf.commitIndex, rf.log)
+	for i := rf.lastApplied + 1; i < len(rf.log) && i <= args.PrevLogIndex && i <= args.LeaderCommit; i++ {
+		// log.Printf("------ %d %d %d %d", rf.me, args.PrevLogIndex, rf.commitIndex, rf.log)
 		(*rf.applyChan) <- ApplyMsg{
 			CommandValid: true,
 			Command:      rf.log[i].Command,
 			CommandIndex: i,
 		}
 		rf.lastApplied++
+		rf.commitIndex++
 	}
 	// log.Printf("%d %d %d", rf.commitIndex, args.LeaderCommit, rf.log)
 }
@@ -346,9 +347,9 @@ func (rf *Raft) ticker() {
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		log.Printf("rf.me %d  rf.currentTerm%d rf.log%d rf.state %d", rf.me, rf.currentTerm, rf.log, rf.state)
+		// log.Printf("rf.me %d  rf.currentTerm%d rf.log%d rf.state %d", rf.me, rf.currentTerm, rf.log, rf.state)
 		if rf.state != Leader && time.Now().After(rf.electExpiryTime) {
-			log.Printf("election %d %d", rf.me, rf.currentTerm)
+			// log.Printf("election %d %d", rf.me, rf.currentTerm)
 			go func() {
 				rf.mu.Lock()
 				rf.state = candidate
@@ -410,11 +411,11 @@ func (rf *Raft) ticker() {
 					args.Term = rf.currentTerm
 					args.LeaderCommit = rf.commitIndex
 					args.PrevLogIndex = rf.nextIndex[idx] - 1
-					log.Printf("inLeader %d %d %d %d", idx, args.PrevLogIndex, rf.nextIndex[idx], len(rf.log))
+					// log.Printf("inLeader %d %d %d %d", idx, args.PrevLogIndex, rf.nextIndex[idx], len(rf.log))
 					args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
 					args.LeaderId = rf.me
 					// //log.Printf("111  %d %d %d", rf.nextIndex[idx], len(rf.log), len(args.Entries))
-					if args.PrevLogIndex <= len(rf.log) {
+					if rf.commitIndex < len(rf.log)-1 || rf.matchIndex[idx] < rf.commitIndex {
 						args.Entries = make([]Entry, len(rf.log[args.PrevLogIndex:]))
 						// log.Printf("_=_+_+_+_+_+ %d %d %d", rf.nextIndex[idx], rf.log[rf.nextIndex[idx]:len(rf.log)], args.Entries)
 						copy(args.Entries, rf.log[args.PrevLogIndex:])
