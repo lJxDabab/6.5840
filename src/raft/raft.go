@@ -20,6 +20,7 @@ package raft
 import (
 	//	"bytes"
 
+	"log"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -347,7 +348,7 @@ func (rf *Raft) ticker() {
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		// log.Printf("rf.me %d  rf.currentTerm%d rf.log%d rf.state %d", rf.me, rf.currentTerm, rf.log, rf.state)
+		log.Printf("rf.me %d  rf.currentTerm%d rf.log%d rf.state %d", rf.me, rf.currentTerm, rf.log, rf.state)
 		if rf.state != Leader && time.Now().After(rf.electExpiryTime) {
 			// log.Printf("election %d %d", rf.me, rf.currentTerm)
 			go func() {
@@ -410,7 +411,11 @@ func (rf *Raft) ticker() {
 					rf.mu.Lock()
 					args.Term = rf.currentTerm
 					args.LeaderCommit = rf.commitIndex
-					args.PrevLogIndex = rf.nextIndex[idx] - 1
+					if rf.nextIndex[idx] > len(rf.log) {
+						args.PrevLogIndex = len(rf.log) - 1
+					} else {
+						args.PrevLogIndex = rf.nextIndex[idx] - 1
+					}
 					// log.Printf("inLeader %d %d %d %d", idx, args.PrevLogIndex, rf.nextIndex[idx], len(rf.log))
 					args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
 					args.LeaderId = rf.me
