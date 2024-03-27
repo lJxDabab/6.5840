@@ -160,7 +160,6 @@ func TestRPCBytes2B(t *testing.T) {
 
 	cfg.one(99, servers, false)
 	bytes0 := cfg.bytesTotal()
-
 	iters := 10
 	var sent int64 = 0
 	for index := 2; index < iters+2; index++ {
@@ -174,6 +173,7 @@ func TestRPCBytes2B(t *testing.T) {
 
 	bytes1 := cfg.bytesTotal()
 	got := bytes1 - bytes0
+	log.Printf("%d %d", bytes0, bytes1)
 	expected := int64(servers) * sent
 	if got > expected+50000 {
 		t.Fatalf("too many RPC bytes; got %v, expected %v", got, expected)
@@ -490,8 +490,7 @@ func TestBackup2B(t *testing.T) {
 
 	cfg.begin("Test (2B): leader backs up quickly over incorrect follower logs")
 
-	cfg.one(rand.Intn(300), servers, true)
-
+	cfg.one(rand.Intn(30), servers, true)
 	// put leader and one follower in a partition
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect((leader1 + 2) % servers)
@@ -500,7 +499,7 @@ func TestBackup2B(t *testing.T) {
 
 	// submit lots of commands that won't commit
 	for i := 0; i < 5; i++ {
-		cfg.rafts[leader1].Start(rand.Intn(300))
+		cfg.rafts[leader1].Start(rand.Intn(30))
 	}
 	time.Sleep(RaftElectionTimeout / 2)
 
@@ -511,12 +510,12 @@ func TestBackup2B(t *testing.T) {
 	cfg.connect((leader1 + 2) % servers)
 	cfg.connect((leader1 + 3) % servers)
 	cfg.connect((leader1 + 4) % servers)
-
+	log.Printf("+++++++++++++++++++++++++++++++++")
 	// lots of successful commands to new group.
 	for i := 0; i < 5; i++ {
-		cfg.one(rand.Intn(300), 3, true)
+		cfg.one(rand.Intn(30), 3, true)
 	}
-
+	log.Printf("======================================")
 	// now another partitioned leader and one follower
 	leader2 := cfg.checkOneLeader()
 	other := (leader1 + 2) % servers
@@ -526,7 +525,7 @@ func TestBackup2B(t *testing.T) {
 	cfg.disconnect(other)
 	// lots more commands that won't commit
 	for i := 0; i < 5; i++ {
-		cfg.rafts[leader2].Start(rand.Intn(300))
+		cfg.rafts[leader2].Start(rand.Intn(30))
 	}
 	time.Sleep(RaftElectionTimeout / 2)
 
@@ -540,14 +539,15 @@ func TestBackup2B(t *testing.T) {
 	log.Printf("------------------------------------")
 	// lots of successful commands to new group.
 	for i := 0; i < 5; i++ {
-		cfg.one(rand.Intn(300), 3, true)
+		log.Printf("           --------------             ")
+		cfg.one(rand.Intn(30), 3, true)
 	}
 	log.Printf("------------------------------------")
 	// now everyone
 	for i := 0; i < servers; i++ {
 		cfg.connect(i)
 	}
-	cfg.one(rand.Intn(300), servers, true)
+	cfg.one(rand.Intn(30), servers, true)
 
 	cfg.end()
 }
